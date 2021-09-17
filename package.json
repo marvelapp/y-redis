@@ -50,17 +50,17 @@
   },
   "homepage": "https://yjs.dev",
   "devDependencies": {
-    "@types/ioredis": "^4.26.6",
+    "@types/ioredis": "^4.27.4",
     "rollup": "^1.32.1",
     "standard": "^10.0.3",
     "typescript": "^3.9.10",
-    "yjs": "^13.5.11"
+    "yjs": "^13.5.12"
   },
   "peerDependencies": {
     "yjs": "^13.0.2"
   },
   "dependencies": {
-    "ioredis": "^4.27.6",
+    "ioredis": "^4.27.9",
     "lib0": "^0.2.42"
   }
 }

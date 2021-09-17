@@ -1,109 +1,161 @@
-
 import * as Y from 'yjs'
-import { RedisPersistence } from '../src/y-redis.js'
-import * as t from 'lib0/testing.js'
-import * as promise from 'lib0/promise.js'
+import * as t from 'lib0/testing'
+import * as promise from 'lib0/promise'
 import Redis from 'ioredis'
+import * as yredis from '../src/utils.js'
+import * as map from 'lib0/map'
 
-/**
- * Two clients concurrently adding content
- *
- * @param {t.TestCase} tc
- */
-export const testPubsub = async tc => {
-  const redis = new Redis()
-  await redis.flushall()
+const N = 1000
 
-  const redisPersistence1 = new RedisPersistence()
-  const doc1 = new Y.Doc()
-  const persistedDoc1 = redisPersistence1.bindState(tc.testName, doc1)
-  await persistedDoc1.synced
+class TestClient {
+  /**
+   * @param {yredis.Conn} conn
+   * @param {string} collectionid
+  */
+  constructor (conn, collectionid) {
+    /**
+     * @type {Map<string, Y.Doc>}
+     */
+    this.ydocs = new Map()
+    this.yarray = this.getDoc('main-array').getArray()
+    this.ymap = this.getDoc('main-map').getMap()
+    this.conn = conn
+    this.clock = '0'
+    this.localClock = 0
+    this.isConnected = false
+    this.collectionid = collectionid
+    this.connect()
+  }
 
-  const redisPersistence2 = new RedisPersistence()
-  const doc2 = new Y.Doc()
-  const persistedDoc2 = redisPersistence2.bindState(tc.testName, doc2)
-  await persistedDoc2.synced
+  /**
+   * @param {string} docid
+   */
+  getDoc (docid) {
+    return map.setIfUndefined(this.ydocs, docid, () => {
+      const ydoc = new Y.Doc()
+      /**
+       * @param {Uint8Array} update
+       * @param {any} origin
+       */
+      const onUpdate = (update, origin) => {
+        if (origin !== this) {
+          this.conn.publish(this.collectionid, docid, update)
+        }
+      }
+      ydoc.on('update', onUpdate)
+      return ydoc
+    })
+  }
 
-  doc1.getArray('test').push([1])
-  doc2.getArray('test').push([2])
+  /**
+   * @param {string} collectionid
+   * @param {string} docid
+   * @param {Uint8Array} update
+   * @param {string} clock
+   */
+  publishUpdate (collectionid, docid, update, clock) {
+    if (this.collectionid === collectionid) {
+      Y.applyUpdate(this.getDoc(docid), update, this)
+      this.clock = clock
+    }
+  }
 
-  await promise.until(0, () => persistedDoc1._clock > 1)
+  connect () {
+    if (!this.isConnected) {
+      this.conn.listen(this, this.collectionid, this.clock)
+      this.isConnected = true
+    }
+  }
 
-  t.assert(doc1.getArray('test').length === 2)
-  t.assert(doc2.getArray('test').length === 2)
-
-  await redisPersistence1.destroy()
-  await redisPersistence2.destroy()
+  disconnect () {
+    this.conn.unlisten(this, this.collectionid)
+    this.isConnected = false
+  }
 }
 
 /**
  * @param {t.TestCase} tc
+ * @param {boolean} [pipelining] optionally enable pipelining. For testing potential performance improvements of autopipelining which is generally supported.
  */
-export const testStoreAndReload = async tc => {
-  const redis = new Redis()
-  await redis.flushall()
-  {
-    const redisPersistence = new RedisPersistence()
-    const doc = new Y.Doc()
-    await redisPersistence.bindState(tc.testName, doc).synced
-    doc.getArray('test').push([1])
-    await promise.wait(50)
-    redisPersistence.destroy()
+const init = async (tc, pipelining = false) => {
+  const collectionId = tc.testName.toLowerCase()
+  const redisRead = new Redis({ readOnly: true })
+  // @ts-ignore
+  const redisWrite = new Redis(pipelining ? { enableAutoPipelining: true, autoPipeliningIgnoredCommands: ['xtrim'] } : {})
+  await redisWrite.xtrim(collectionId, 'MAXLEN', '0')
+  const conn = new yredis.Conn(redisRead, redisWrite)
+  const clients = [0, 0, 0, 0, 0].map(_ => new TestClient(conn, collectionId))
+  return { conn, clients, client1: clients[0], client2: clients[1], client3: clients[2], client4: clients[3], client5: clients[4], redis: redisRead, redisWrite, collectionId }
+}
+
+/**
+ * @param {Array<TestClient>} clients
+ */
+const compare = async clients => {
+  await promise.wait(50)
+  for (let i = 0; i < clients.length - 1; i++) {
+    const client1 = clients[i]
+    const client2 = clients[i + 1]
+    t.compareArrays(client1.yarray.toArray(), client2.yarray.toArray())
+    t.compareArrays(client1.ymap.toJSON(), client2.ymap.toJSON())
   }
-  {
-    const redisPersistence = new RedisPersistence()
-    const doc = new Y.Doc()
-    await redisPersistence.bindState(tc.testName, doc).synced
-    t.assert(doc.getArray('test').length === 1)
-    await redisPersistence.destroy()
-  }
+}
+
+/**
+ * Wait until at least one update was received by any client and all clients are synced
+ *
+ * @param {Array<TestClient>} clients
+ */
+const waitForClientsSynced = clients => {
+  const lowestClock = clients.map(client => client.clock).reduce((prev, next) => yredis.compareTimestamps(prev, next) ? next : prev)
+  return promise.until(0, () => clients[0].clock !== lowestClock && clients.every(/** @param {TestClient} client */ client => client.clock === clients[0].clock))
 }
 
 /**
  * @param {t.TestCase} tc
  */
 export const testClearDocument = async tc => {
-  const redis = new Redis()
-  await redis.flushall()
-  {
-    const redisPersistence = new RedisPersistence()
-    const doc = new Y.Doc()
-    await redisPersistence.bindState(tc.testName, doc).synced
-    doc.getArray('test').push([1])
-    await promise.wait(50)
-    await redisPersistence.clearDocument(tc.testName)
-    await redisPersistence.destroy()
-  }
-  {
-    const redisPersistence = new RedisPersistence()
-    const doc = new Y.Doc()
-    await redisPersistence.bindState(tc.testName, doc).synced
-    t.assert(doc.getArray('test').length === 0)
-    await redisPersistence.destroy()
-  }
+  const { conn, client1, clients, collectionId } = await init(tc, false)
+  client1.yarray.push([1])
+  await waitForClientsSynced(clients)
+  await conn.trim(collectionId, client1.clock)
+  const client2 = new TestClient(conn, collectionId)
+  client2.yarray.push([2])
+  await waitForClientsSynced([...clients, client2])
+  t.assert(client2.yarray.length === 1)
+  t.assert(client1.yarray.length === 2)
 }
 
 /**
+ * Two clients concurrently adding content
+ *
  * @param {t.TestCase} tc
  */
-export const testClearAllDocument = async tc => {
-  const redis = new Redis()
-  await redis.flushall()
-  {
-    const redisPersistence = new RedisPersistence()
-    const doc = new Y.Doc()
-    await redisPersistence.bindState(tc.testName, doc).synced
-    doc.getArray('test').push([1])
-    await promise.wait(50)
-    await redisPersistence.clearAllDocuments()
-  }
-  {
-    const redisPersistence = new RedisPersistence()
-    const doc = new Y.Doc()
-    await redisPersistence.bindState(tc.testName, doc).synced
-    t.assert(doc.getArray('test').length === 0)
-    await redisPersistence.destroy()
-  }
+export const testLateJoin = async tc => {
+  const { client1, client3, clients, collectionId, conn } = await init(tc)
+  const { clients: otherClients, client4 } = await init(tc)
+  client1.yarray.insert(0, ['a'])
+  client1.yarray.insert(0, ['b'])
+  client3.yarray.insert(0, ['c'])
+  client4.yarray.insert(0, ['d'])
+  // create a fresh conn after content was inserted
+  await waitForClientsSynced([...clients, ...otherClients])
+  const client2 = new TestClient(conn, collectionId)
+  await compare([client1, client2, ...clients, ...otherClients])
+}
+
+/**
+ * Two clients from different connections can concurrently add content.
+ *
+ * @param {t.TestCase} tc
+ */
+export const testConcurrentEdit = async tc => {
+  const { client1 } = await init(tc)
+  const { client2 } = await init(tc)
+  client1.yarray.push([1])
+  client2.yarray.push([2])
+  await waitForClientsSynced([client1, client2])
+  await compare([client1, client2])
 }
 
 /**
@@ -112,37 +164,22 @@ export const testClearAllDocument = async tc => {
  * @param {t.TestCase} tc
  */
 export const testPerformance = async tc => {
-  const redis = new Redis()
-  await redis.flushall()
-  const N = 10000
-  {
-    const redisPersistence = new RedisPersistence()
-    const doc = new Y.Doc()
-    const persistenceDoc = redisPersistence.bindState(tc.testName, doc)
-    await persistenceDoc.synced
-    await t.measureTime(`write ${N / 1000}k updates`, async () => {
-      const testarray = doc.getArray('test')
-      for (let i = 0; i < N; i++) {
-        testarray.insert(0, [i])
-      }
-      await promise.until(0, () => persistenceDoc._clock >= N)
-      t.assert(testarray.length === N)
-      t.assert(persistenceDoc._clock === N)
-      return undefined
-    })
-    await redisPersistence.destroy()
-  }
-  {
-    const redisPersistence = new RedisPersistence()
-    const doc = new Y.Doc()
-    const persistenceDoc = redisPersistence.bindState(tc.testName, doc)
-    await t.measureTime(`read ${N / 1000}k updates`, async () => {
-      await persistenceDoc.synced
-      t.assert(doc.getArray('test').length === N)
-      return undefined
-    })
-    await redisPersistence.destroy()
-  }
+  const { client1, conn, clients, collectionId } = await init(tc)
+  await t.measureTimeAsync(`write ${N / 1000}k updates`, async () => {
+    const testarray = client1.yarray
+    for (let i = 0; i < N; i++) {
+      testarray.insert(0, [i])
+    }
+    await waitForClientsSynced(clients)
+    t.assert(testarray.length === N)
+    return undefined
+  })
+  const newClient = new TestClient(conn, collectionId)
+  await t.measureTimeAsync(`read ${N / 1000}k updates`, async () => {
+    await waitForClientsSynced([client1, newClient])
+    t.assert(newClient.yarray.length === N)
+    return undefined
+  })
 }
 
 /**
@@ -151,56 +188,33 @@ export const testPerformance = async tc => {
  * @param {t.TestCase} tc
  */
 export const testPerformanceConcurrent = async tc => {
-  const redis = new Redis()
-  await redis.flushall()
-  const N = 100
-  {
-    const redisPersistence1 = new RedisPersistence()
-    const doc1 = new Y.Doc()
-    const persistenceDoc1 = redisPersistence1.bindState(tc.testName, doc1)
-    await persistenceDoc1.synced
-    const redisPersistence2 = new RedisPersistence()
-    const doc2 = new Y.Doc()
-    const persistenceDoc2 = redisPersistence2.bindState(tc.testName, doc2)
-    await persistenceDoc2.synced
-    await t.measureTimeAsync(`write ${N / 1000}k updates`, async () => {
-      const testarray1 = doc1.getArray('test')
-      const testarray2 = doc2.getArray('test')
-      for (let i = 0; i < N; i++) {
-        if (i % 2) {
-          testarray1.insert(0, [i])
-        } else {
-          testarray2.insert(0, [i])
-        }
-        if (i % 10 === 0) {
-          await promise.until(0, () => persistenceDoc1._clock > i && persistenceDoc2._clock >= i)
-          t.assert(persistenceDoc1._clock === i + 1)
-          t.assert(persistenceDoc2._clock === i + 1)
-        }
+  const { client1, client2, conn, clients, collectionId } = await init(tc)
+  await t.measureTimeAsync(`write ${N / 1000}k updates`, async () => {
+    const testarray1 = client1.yarray
+    const testarray2 = client2.yarray
+    for (let i = 0; i < N; i++) {
+      if (i % 2) {
+        testarray1.insert(0, [i])
+      } else {
+        testarray2.insert(0, [i])
       }
-      await promise.until(0, () => persistenceDoc1._clock >= N && persistenceDoc2._clock >= N)
-      t.assert(testarray1.length === N)
-      t.assert(testarray2.length === N)
-      t.assert(persistenceDoc1._clock === N)
-      t.assert(persistenceDoc2._clock === N)
-      return undefined
-    })
-    await redisPersistence1.destroy()
-  }
-  {
-    const redisPersistence = new RedisPersistence()
-    const doc = new Y.Doc()
-    const persistenceDoc = redisPersistence.bindState(tc.testName, doc)
-
-    await t.measureTime(`read ${N / 1000}k updates`, async () => {
-      await persistenceDoc.synced
-      t.assert(doc.getArray('test').length === N)
-      return undefined
-    })
-    await redisPersistence.destroy()
-  }
-  const updateslen = await redis.llen(`${tc.testName}:updates`)
-  t.assert(updateslen === N)
+      if (i % 10 === 0) {
+        await waitForClientsSynced(clients)
+        t.assert(testarray1.length === i + 1)
+        t.assert(testarray2.length === i + 1)
+      }
+    }
+    await waitForClientsSynced(clients)
+    t.assert(testarray1.length === N)
+    t.assert(testarray2.length === N)
+    return undefined
+  })
+  await t.measureTimeAsync(`read ${N / 1000}k updates`, async () => {
+    const newClient = new TestClient(conn, collectionId)
+    await waitForClientsSynced([client1, newClient])
+    t.compare(newClient.yarray.length, N)
+    return undefined
+  })
 }
 
 /**
@@ -209,41 +223,22 @@ export const testPerformanceConcurrent = async tc => {
  * @param {t.TestCase} tc
  */
 export const testPerformanceReceive = async tc => {
-  const redis = new Redis()
-  await redis.flushall()
-  const N = 10000
-  {
-    const redisPersistence1 = new RedisPersistence()
-    const doc1 = new Y.Doc()
-    const persistenceDoc1 = redisPersistence1.bindState(tc.testName, doc1)
-    await persistenceDoc1.synced
-    const redisPersistence2 = new RedisPersistence()
-    const doc2 = new Y.Doc()
-    const persistenceDoc2 = redisPersistence2.bindState(tc.testName, doc2)
-    await persistenceDoc2.synced
-    await t.measureTime(`write ${N / 1000}k updates`, async () => {
-      const testarray1 = doc1.getArray('test')
-      const testarray2 = doc1.getArray('test')
-      for (let i = 0; i < N; i++) {
-        testarray1.insert(0, [i])
-      }
-      await promise.until(0, () => persistenceDoc1._clock >= N && persistenceDoc2._clock >= N)
-      t.assert(testarray1.length === N)
-      t.assert(testarray2.length === N)
-      t.assert(persistenceDoc1._clock === N)
-      t.assert(persistenceDoc2._clock === N)
-      return undefined
-    })
-    await redisPersistence1.destroy()
-  }
-  await t.measureTime(`read ${N / 1000}k updates`, async () => {
-    const doc = new Y.Doc()
-    const redisPersistence = new RedisPersistence()
-    await redisPersistence.bindState(tc.testName, doc).synced
-    t.assert(doc.getArray('test').length === N)
-    redisPersistence.destroy()
+  const { client1, client2, conn, clients, collectionId } = await init(tc)
+  await t.measureTimeAsync(`write ${N / 1000}k updates`, async () => {
+    const testarray1 = client1.yarray
+    const testarray2 = client2.yarray
+    for (let i = 0; i < N; i++) {
+      testarray1.insert(0, [i])
+    }
+    await waitForClientsSynced(clients)
+    t.assert(testarray1.length === N)
+    t.assert(testarray2.length === N)
     return undefined
   })
-  const updateslen = await redis.llen(`${tc.testName}:updates`)
-  t.assert(updateslen === N)
+  await t.measureTimeAsync(`read ${N / 1000}k updates`, async () => {
+    const newClient = new TestClient(conn, collectionId)
+    await waitForClientsSynced([client1, newClient])
+    t.assert(newClient.yarray.length === N)
+    return undefined
+  })
 }
