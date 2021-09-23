@@ -2,14 +2,14 @@ import * as Y from 'yjs'
 import * as t from 'lib0/testing'
 import * as promise from 'lib0/promise'
 import Redis from 'ioredis'
-import * as yredis from '../src/utils.js'
+import * as yredis from '../src/redis-helpers.js'
 import * as map from 'lib0/map'
 
 const N = 1000
 
 class TestClient {
   /**
-   * @param {yredis.Conn} conn
+   * @param {yredis.RedisConn} conn
    * @param {string} collectionid
   */
   constructor (conn, collectionid) {
@@ -83,7 +83,7 @@ const init = async (tc, pipelining = false) => {
   // @ts-ignore
   const redisWrite = new Redis(pipelining ? { enableAutoPipelining: true, autoPipeliningIgnoredCommands: ['xtrim'] } : {})
   await redisWrite.xtrim(collectionId, 'MAXLEN', '0')
-  const conn = new yredis.Conn(redisRead, redisWrite)
+  const conn = new yredis.RedisConn(redisRead, redisWrite)
   const clients = [0, 0, 0, 0, 0].map(_ => new TestClient(conn, collectionId))
   return { conn, clients, client1: clients[0], client2: clients[1], client3: clients[2], client4: clients[3], client5: clients[4], redis: redisRead, redisWrite, collectionId }
 }

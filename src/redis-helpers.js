@@ -1,11 +1,11 @@
 
 import Redis from 'ioredis' // eslint-disable-line no-unused-vars
 import * as map from 'lib0/map'
-import * as logging from 'lib0/logging'
 import * as Y from 'yjs'
 import * as buffer from 'lib0/buffer'
+import { logger } from './helpers.js'
 
-const logger = logging.createModuleLogger('y-redis')
+export { Redis }
 
 /**
  * @param {string} time
@@ -82,7 +82,7 @@ const queryStreamUpdates = async (redis, clients, block) => {
       collection.clock = nextClock
     }
     updates.forEach((updates, docid) => {
-      const update = Y.mergeUpdates(updates)
+      const update = Y.mergeUpdatesV2(updates)
       // console.log(`collection: "${collectionid}", room: "${docid}". message: "${update}", lastId: "${nextClock}"`)
       if (collection) {
         collection.clients.forEach(client => {
@@ -94,7 +94,7 @@ const queryStreamUpdates = async (redis, clients, block) => {
 }
 
 /**
- * @param {Conn} conn
+ * @param {RedisConn} conn
  */
 const queryAllStreamsInterval = async conn => {
   if (!conn.isConnected) {
@@ -121,8 +121,7 @@ const queryAllStreamsInterval = async conn => {
   }
 }
 
-// eslint-disable-next-line no-unused-vars
-class Client {
+export class Client {
   /**
    * @param {string} collection
    * @param {string} docid
@@ -134,7 +133,7 @@ class Client {
   }
 }
 
-export class Conn {
+export class RedisConn {
   /**
    * @param {Redis.Cluster | Redis.Redis} redisRead
    * @param {Redis.Cluster | Redis.Redis} redisWrite

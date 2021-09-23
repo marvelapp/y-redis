@@ -1,4 +1,5 @@
-import * as redis from './y-redis.tests.js'
+// import * as redis from './y-redis.tests.js'
+import * as websocket from './websocket.tests.js'
 
 import { runTests } from 'lib0/testing.js'
 import { isBrowser, isNode } from 'lib0/environment.js'
@@ -8,7 +9,8 @@ if (isBrowser) {
   log.createVConsole(document.body)
 }
 runTests({
-  redis
+  // redis,
+  websocket
 }).then(success => {
   /* istanbul ignore next */
   if (isNode) {
