@@ -4,6 +4,7 @@ import WS from 'ws'
 import * as t from 'lib0/testing'
 import { RedisWebsocketProvider } from '../src/y-redis.js'
 import Redis from 'ioredis'
+import * as promise from 'lib0/promise'
 
 const redisConn = new Redis()
 /**
@@ -29,12 +30,26 @@ export const testSync = async tc => {
   const provider = new RedisWebsocketProvider('ws://localhost:4321', { WebSocketPolyfill })
   const doc = provider.getDoc(collectionid, 'main')
   doc.getArray().insert(0, ['X'])
+  await promise.wait(500)
 
   const provider2 = new RedisWebsocketProvider('ws://localhost:4321', { WebSocketPolyfill })
   const doc2 = provider2.getDoc(collectionid, 'main')
-  return new Promise(resolve => {
+  await promise.create(resolve => {
+    let done = false
     doc2.getArray().observe(() => {
-      t.compareArrays(doc2.getArray().toArray(), ['X'])
+      if (!done) {
+        t.compareArrays(doc2.getArray().toArray(), ['X'])
+        resolve(void 0)
+        done = true
+      }
+    })
+  })
+
+  doc2.getArray().insert(1, ['Y'])
+
+  await promise.create(resolve => {
+    doc.getArray().observe(() => {
+      t.compareArrays(doc.getArray().toArray(), ['X', 'Y'])
       resolve(void 0)
     })
   })
