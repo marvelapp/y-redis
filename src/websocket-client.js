@@ -8,6 +8,9 @@ import * as time from 'lib0/time'
 import * as map from 'lib0/map'
 import * as decoding from 'lib0/decoding'
 import * as encoding from 'lib0/encoding'
+import { MemoryStorage } from './storage-memory.js'
+import { AbstractClientStorage } from './storage.js' // eslint-disable-line
+import { promise } from 'lib0'
 
 const reconnectTimeoutBase = 1200
 const maxReconnectTimeout = 2500
@@ -82,14 +85,22 @@ export class RedisWebsocketProvider extends Observable {
    * @param {string} url
    * @param {object} [opts]
    * @param {typeof WebSocket} [opts.WebSocketPolyfill] Optionall provide a WebSocket polyfill
+   * @param {AbstractClientStorage} [opts.storage]
    */
-  constructor (url, { WebSocketPolyfill = WebSocket } = {}) {
+  constructor (url, { WebSocketPolyfill = WebSocket, storage = new MemoryStorage() } = {}) {
     super()
     this.url = url
+    this.storage = storage
     /**
      * @type {Map<string, { ydocs: Map<string, Y.Doc>, clock: string }>}
      */
     this.collections = new Map()
+
+    /**
+     * @type {Map<string, { ydocs: Map<string, Y.Doc> }>}
+     */
+    this.loadingCollections = new Map()
+
     /**
      * @type {WebSocket?}
      */
@@ -110,6 +121,22 @@ export class RedisWebsocketProvider extends Observable {
     this._messageCache = []
 
     /**
+     * Auto-subscribe to collections in the storage provider
+     */
+    this.storage.getCollections().then(clocks => {
+      const encoder = encoding.createEncoder()
+      const subCollections = new Map()
+      clocks.forEach(({ clock, collectionid }) => {
+        subCollections.set(collectionid, { clock })
+        map.setIfUndefined(this.collections, collectionid, () => ({ ydocs: new Map(), clock }))
+      })
+      if (this.wsconnected) {
+        protocol.clientRequestSubscriptions(encoder, subCollections)
+        this._send(encoding.toUint8Array(encoder))
+      }
+    })
+
+    /**
      * Listens to Yjs updates and sends them to remote peers (ws and broadcastchannel)
      *
      * @param {Uint8Array} update
@@ -118,12 +145,20 @@ export class RedisWebsocketProvider extends Observable {
      */
     this._updateHandler = (update, origin, ydoc) => {
       if (origin !== this) {
-        this.collections.forEach(({ ydocs }, collectionid) => {
+        /**
+         * @param {{ ydocs: Map<string, any> }} collection
+         * @param {string} collectionid
+         */
+        const checkPublishUpdate = ({ ydocs }, collectionid) => {
           if (ydocs.get(ydoc.guid) === ydoc) {
-            const message = protocol.encodeDocumentUpdates(collectionid, [{ docid: ydoc.guid, update }])
-            this._send(message)
+            this.storage.storePendingUpdate(collectionid, ydoc.guid, update).then(pendingid => {
+              const message = protocol.encodeDocumentUpdates(collectionid, [{ docid: ydoc.guid, update, pendingid }])
+              this._send(message)
+            })
           }
-        })
+        }
+        this.collections.forEach(checkPublishUpdate)
+        this.loadingCollections.forEach(checkPublishUpdate)
       }
     }
     this._checkInterval = /** @type {any} */ (setInterval(() => {
@@ -152,19 +187,38 @@ export class RedisWebsocketProvider extends Observable {
    * @param {string} docid
    */
   getDoc (collectionid, docid) {
-    const collection = map.setIfUndefined(this.collections, collectionid, () => {
-      return { clock: '0', ydocs: new Map() }
+    const collection = this.collections.get(collectionid) || map.setIfUndefined(this.loadingCollections, collectionid, () => {
+      this.storage.initializeCollection(collectionid).then(clock => {
+        this.collections.set(collectionid, { ydocs: collection.ydocs, clock })
+        this.loadingCollections.delete(collectionid)
+        // now subscribe to updates on collection
+        const encoder = encoding.createEncoder()
+        const subCollections = new Map()
+        subCollections.set(collectionid, { clock })
+        if (this.wsconnected) {
+          protocol.clientRequestSubscriptions(encoder, subCollections)
+          this._send(encoding.toUint8Array(encoder))
+        }
+      })
+      return { ydocs: new Map() }
     })
     return map.setIfUndefined(collection.ydocs, docid, () => {
       const ydoc = new Y.Doc({ guid: docid })
-      const encoder = encoding.createEncoder()
-      const subCollections = new Map()
+      const docUpdates = this.storage.getDocument(collectionid, docid, '0')
+      const pendingUpdates = this.storage.getPendingDocumentUpdates(collectionid, docid)
+      promise.all(/** @type {any} */ ([docUpdates, pendingUpdates])).then(([dupdates, pupdates]) => {
+        ydoc.transact(() => {
+          dupdates.updates.forEach(/** @param {Uint8Array} update */ update => {
+            Y.applyUpdate(ydoc, update)
+          })
+          pupdates.forEach(/** @param {Uint8Array} update */ update => {
+            Y.applyUpdate(ydoc, update)
+          })
+        }, this)
+        return this.storage.storeMergedUpdate(collectionid, docid, Y.encodeStateAsUpdateV2(ydoc), '0', pupdates.endClock)
+      })
       ydoc.on('updateV2', this._updateHandler)
-      subCollections.set(collectionid, { ydoc, clock: '0' })
-      if (this.wsconnected) {
-        protocol.clientRequestSubscriptions(encoder, subCollections)
-        this._send(encoding.toUint8Array(encoder))
-      }
+
       return ydoc
     })
   }

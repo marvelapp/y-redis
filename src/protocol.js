@@ -5,14 +5,16 @@ import * as Y from 'yjs' // eslint-disable-line
 import { Client, RedisConn } from './redis-helpers.js' // eslint-disable-line
 import { ClientConn } from '../bin/websocket-server.js' // eslint-disable-line
 import { logger } from './helpers.js'
+import * as promise from 'lib0/promise'
 
 export const MESSAGE_UPDATE_SERVER = 0
 export const MESSAGE_UPDATE_CLIENT = 1
 export const MESSAGE_SUBSCRIBE_COLLECTION = 2
+export const MESSAGE_CONFIRM = 3
 
 /**
  * @param {string} collectionid
- * @param {Array<{docid: string, update: Uint8Array}>} docUpdates
+ * @param {Array<{docid: string, update: Uint8Array, pendingid: string}>} docUpdates
  * @return {Uint8Array} Encoded message that you can propagate
  */
 export const encodeDocumentUpdates = (collectionid, docUpdates) => {
@@ -20,9 +22,24 @@ export const encodeDocumentUpdates = (collectionid, docUpdates) => {
   encoding.writeVarUint(encoder, MESSAGE_UPDATE_CLIENT)
   encoding.writeVarString(encoder, collectionid)
   encoding.writeVarUint(encoder, docUpdates.length)
-  docUpdates.forEach(({ docid, update }) => {
+  docUpdates.forEach(({ docid, update, pendingid }) => {
+    encoding.writeVarString(encoder, pendingid)
     encoding.writeVarString(encoder, docid)
     encoding.writeVarUint8Array(encoder, update)
+  })
+  return encoding.toUint8Array(encoder)
+}
+
+/**
+ * @param {Array<string>} pendingids
+ * @return {Uint8Array}
+ */
+export const encodeConfirmingMessage = pendingids => {
+  const encoder = encoding.createEncoder()
+  encoding.writeVarUint(encoder, MESSAGE_CONFIRM)
+  encoding.writeVarUint(encoder, pendingids.length)
+  pendingids.forEach(pendingid => {
+    encoding.writeVarString(encoder, pendingid)
   })
   return encoding.toUint8Array(encoder)
 }
@@ -58,8 +75,10 @@ export const serverWriteUpdate = (encoder, collectionid, docid, update, clock) =
 /**
  * @param {decoding.Decoder} decoder
  * @param {RedisWebsocketProvider} provider
+ * @return {Promise<any>}
  */
 export const clientReadMessage = (decoder, provider) => {
+  const promises = []
   while (decoding.hasContent(decoder)) {
     switch (decoding.readVarUint(decoder)) {
       case MESSAGE_UPDATE_SERVER: {
@@ -68,17 +87,28 @@ export const clientReadMessage = (decoder, provider) => {
         const update = decoding.readVarUint8Array(decoder)
         const clock = decoding.readVarString(decoder)
         const collection = provider.collections.get(collectionid)
+        promises.push(provider.storage.storeUpdate(collectionid, docid, update, clock))
         logger('Received update from server', { docid, clock })
         if (collection) {
           const ydoc = collection.ydocs.get(docid)
           collection.clock = clock
           if (ydoc) {
-            Y.applyUpdateV2(ydoc, update)
+            Y.applyUpdateV2(ydoc, update, provider)
           }
         }
+        break
+      }
+      case MESSAGE_CONFIRM: {
+        let len = decoding.readVarUint(decoder)
+        while (len--) {
+          const pendingid = decoding.readVarString(decoder)
+          provider.storage.confirmPendingUpdate(pendingid)
+        }
+        break
       }
     }
   }
+  return promise.all(promises)
 }
 
 /**
@@ -88,16 +118,21 @@ export const clientReadMessage = (decoder, provider) => {
  */
 export const serverReadMessage = (message, redisConn, clientConn) => {
   const decoder = decoding.createDecoder(new Uint8Array(message))
+  /**
+   * @type {Array<Promise<string>>}
+   */
+  const confirmingPromises = []
   while (decoding.hasContent(decoder)) {
     switch (decoding.readUint8(decoder)) {
       case MESSAGE_UPDATE_CLIENT: {
         const collectionid = decoding.readVarString(decoder)
         const docUpdates = decoding.readVarUint(decoder)
         for (let i = 0; i < docUpdates; i++) {
+          const pendingid = decoding.readVarString(decoder)
           const docid = decoding.readVarString(decoder)
           const update = decoding.readVarUint8Array(decoder)
-          logger('Received update from client', { docid, collectionid })
-          redisConn.publish(collectionid, docid, update)
+          logger('Received update from client', { docid, collectionid, pendingid })
+          confirmingPromises.push(redisConn.publish(collectionid, docid, update).then(() => pendingid))
         }
         break
       }
@@ -112,5 +147,10 @@ export const serverReadMessage = (message, redisConn, clientConn) => {
         break
       }
     }
+  }
+  if (confirmingPromises.length > 0) {
+    promise.all(confirmingPromises).then(pending => {
+      clientConn.ws.send(encodeConfirmingMessage(pending))
+    })
   }
 }

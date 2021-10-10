@@ -11,7 +11,7 @@ export { Redis }
  * @param {string} time
  * @return {[number, number]}
  */
-export const paresTimestamp = time => {
+export const parseTimestamp = time => {
   const t = time.split('-').map(s => Number.parseInt(s))
   if (t.length === 1) {
     t.push(0)
@@ -25,8 +25,8 @@ export const paresTimestamp = time => {
  * @return {boolean} True iff time1 >= time2
  */
 export const compareTimestamps = (time1, time2) => {
-  const t1 = paresTimestamp(time1)
-  const t2 = paresTimestamp(time2)
+  const t1 = parseTimestamp(time1)
+  const t2 = parseTimestamp(time2)
   return t1[0] > t2[0] || (t1[0] === t2[0] && t1[1] >= t2[1])
 }
 
@@ -207,9 +207,10 @@ export class RedisConn {
    * @param {string} collectionId
    * @param {string} docId
    * @param {Uint8Array} update
+   * @return {Promise<string>}
    */
   publish (collectionId, docId, update) {
-    this.redisWrite.xadd(collectionId, '*', docId, buffer.toBase64(update))
+    return this.redisWrite.xadd(collectionId, '*', docId, buffer.toBase64(update))
   }
 
   /**
@@ -221,7 +222,7 @@ export class RedisConn {
    * @return {Promise<number>} returns the number of evicted entries
    */
   trim (collectionId, clock) {
-    const t = paresTimestamp(clock)
+    const t = parseTimestamp(clock)
     return this.redisWrite.xtrim(collectionId, 'MINID', `${t[0]}-${t[1] + 1}`)
   }
 }

@@ -1,8 +1,8 @@
 
 import { AbstractClientStorage } from './storage.js' // eslint-disable-line
-import * as error from 'lib0/error' // @todo remove
 import * as promise from 'lib0/promise'
 import * as map from 'lib0/map'
+import { parseTimestamp } from './redis-helpers.js'
 
 /**
  * @template T
@@ -22,18 +22,62 @@ export class MemoryStorage {
      * @type {Map<string, Map<string, Array<{ clock: string, update: Uint8Array }>>>}
      */
     this.collections = new Map()
+    /**
+     * @type {Array<{ pid: string, update: Uint8Array, collectionid: string, docid: string }>}
+     */
+    this.pending = []
+    this.nextPid = 0
+  }
+
+  /**
+   * Retrieve the latest clock for a collection.
+   *
+   * @param {string} collectionid
+   * @return {Promise<string>}
+   */
+  getClock (collectionid) {
+    let latest = '0'
+    const collection = this.collections.get(collectionid)
+    if (collection) {
+      collection.forEach(updates => {
+        const collectionClock = updates[updates.length - 1].clock
+        if (collectionClock > latest) {
+          latest = collectionClock
+        }
+      })
+    }
+    return Promise.resolve(latest)
+  }
+
+  /**
+   * @param {string} collectionid
+   * @return {Promise<string>}
+   */
+  initializeCollection (collectionid) {
+    map.setIfUndefined(this.collections, collectionid, () => new Map())
+    return this.getClock(collectionid)
+  }
+
+  /**
+   * Update the clock of a collection. This should automatically serve as a subscription.
+   *
+   * @return {Promise<Array<{ collectionid: string, clock: string }>>}
+   */
+  getCollections () {
+    return promise.all(map.map(this.collections, (collection, collectionid) => this.getClock(collectionid).then(clock => ({ clock, collectionid }))))
   }
 
   /**
    * @param {string} collectionid
    * @param {string} docid
    * @param {string} clock
-   * @return {Array<Uint8Array>}
+   * @return {Promise<{ updates: Array<Uint8Array>, endClock: string }>}
    */
   getDocument (collectionid, docid, clock) {
     const updates = /** @type {Map<string, Array<{ clock: string, update: Uint8Array }>>} */ (this.collections.get(collectionid) || new Map()).get(docid) || []
     const start = updates.findIndex(update => update.clock >= clock)
-    return updates.slice(start).map(update => update.update)
+    const endClock = updates.length > 0 ? updates[updates.length - 1].clock : '0'
+    return Promise.resolve({ updates: updates.slice(start).map(update => update.update), endClock })
   }
 
   /**
@@ -88,36 +132,67 @@ export class MemoryStorage {
   storeMergedUpdate (collectionid, docid, update, startClock, endClock) {
     /**
      * @type {Map<string, Array<{ clock: string, update: Uint8Array }>>}
-     *
-    const collection = this.collections.get(collectionid) || new Map()
+     */
+    const collection = map.setIfUndefined(this.collections, collectionid, () => new Map())
     const updates = collection.get(docid) || []
-    */
-    error.methodUnimplemented()
+    const end = parseTimestamp(endClock)
+    const start = parseTimestamp(startClock)
+    const filtered = updates.filter(({ clock }) => {
+      const updateClock = parseTimestamp(clock)
+      return updateClock[0] < start[0] || updateClock[0] > end[0] || (updateClock[0] === end[0] && updateClock[1] > end[1])
+    })
+    filtered.push({ update, clock: endClock })
+    collection.set(docid, filtered)
   }
 
   /**
    * @param {string} collectionid
    * @param {string} docid
    * @param {Uint8Array} update
-   * @return {Promise<any>}
+   * @return {Promise<string>}
    */
   storePendingUpdate (collectionid, docid, update) {
-    error.methodUnimplemented()
+    const pid = '' + this.nextPid++
+    this.pending.push({ pid, update, collectionid, docid })
+    return /** @type {Promise<string>} */ (promise.resolve(pid))
   }
 
   /**
-   * @param {function({ collectionid: string, docid: string, update: Uint8Array, done: boolean }): void} f
+   * We move an update from pending to actual message buffer after it has been acknowledged by the server.
+   *
+   * @param {string} pid
+   */
+  confirmPendingUpdate (pid) {
+    const i = this.pending.findIndex(pending => pending.pid === pid)
+    this.pending.splice(i, 1)
+  }
+
+  /**
+   * @param {function({ collectionid: string, docid: string, update: Uint8Array }): void} f
+   * @return {Promise<void>}
    */
   iteratePendingUpdates (f) {
-    error.methodUnimplemented()
+    this.pending.forEach(pending => {
+      f(pending)
+    })
+    return promise.resolve()
   }
 
   /**
    * @param {string} collectionid
    * @param {string} docid
-   * @return {Array<Uint8Array>}
+   * @return {Promise<Array<Uint8Array>>}
    */
-  getPendingDocumentUpdates (collectionid, docid) {
-    error.methodUnimplemented()
+  async getPendingDocumentUpdates (collectionid, docid) {
+    /**
+     * @type {Array<Uint8Array>}
+     */
+    const updates = []
+    await this.iteratePendingUpdates(pending => {
+      if (pending.collectionid === collectionid && pending.docid === docid) {
+        updates.push(pending.update)
+      }
+    })
+    return updates
   }
 }
