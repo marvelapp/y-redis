@@ -42,7 +42,7 @@ class TestClient {
           this.conn.publish(this.collectionid, docid, update)
         }
       }
-      ydoc.on('update', onUpdate)
+      ydoc.on('updateV2', onUpdate)
       return ydoc
     })
   }
@@ -55,7 +55,7 @@ class TestClient {
    */
   publishUpdate (collectionid, docid, update, clock) {
     if (this.collectionid === collectionid) {
-      Y.applyUpdate(this.getDoc(docid), update, this)
+      Y.applyUpdateV2(this.getDoc(docid), update, this)
       this.clock = clock
     }
   }

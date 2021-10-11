@@ -1,4 +1,4 @@
-// import * as redis from './y-redis.tests.js'
+import * as redis from './y-redis.tests.js'
 import * as websocket from './websocket.tests.js'
 import * as storage from './storage.js'
 
@@ -10,7 +10,7 @@ if (isBrowser) {
   log.createVConsole(document.body)
 }
 runTests({
-  // redis,
+  redis,
   websocket,
   storage
 }).then(success => {

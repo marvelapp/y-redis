@@ -209,13 +209,13 @@ export class RedisWebsocketProvider extends Observable {
       promise.all(/** @type {any} */ ([docUpdates, pendingUpdates])).then(([dupdates, pupdates]) => {
         ydoc.transact(() => {
           dupdates.updates.forEach(/** @param {Uint8Array} update */ update => {
-            Y.applyUpdate(ydoc, update)
+            Y.applyUpdateV2(ydoc, update)
           })
           pupdates.forEach(/** @param {Uint8Array} update */ update => {
-            Y.applyUpdate(ydoc, update)
+            Y.applyUpdateV2(ydoc, update)
           })
         }, this)
-        return this.storage.storeMergedUpdate(collectionid, docid, Y.encodeStateAsUpdateV2(ydoc), '0', pupdates.endClock)
+        return this.storage.storeMergedUpdate(collectionid, docid, Y.encodeStateAsUpdateV2(ydoc), '0', dupdates.endClock)
       })
       ydoc.on('updateV2', this._updateHandler)
 
