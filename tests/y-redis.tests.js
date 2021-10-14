@@ -2,7 +2,8 @@ import * as Y from 'yjs'
 import * as t from 'lib0/testing'
 import * as promise from 'lib0/promise'
 import Redis from 'ioredis'
-import * as yredis from '../src/redis-helpers.js'
+import * as yredis from '../server/redis-helpers.js'
+import { compareTimestamps, logger } from '../lib/utils.js'
 import * as map from 'lib0/map'
 
 const N = 1000
@@ -60,6 +61,13 @@ class TestClient {
     }
   }
 
+  /**
+   * @param {string} collectionid
+   */
+  syncedCollection (collectionid) {
+    logger('Client synced collection ', collectionid)
+  }
+
   connect () {
     if (!this.isConnected) {
       this.conn.listen(this, this.collectionid, this.clock)
@@ -107,7 +115,7 @@ const compare = async clients => {
  * @param {Array<TestClient>} clients
  */
 const waitForClientsSynced = clients => {
-  const lowestClock = clients.map(client => client.clock).reduce((prev, next) => yredis.compareTimestamps(prev, next) ? next : prev)
+  const lowestClock = clients.map(client => client.clock).reduce((prev, next) => compareTimestamps(prev, next) ? next : prev)
   return promise.until(0, () => clients[0].clock !== lowestClock && clients.every(/** @param {TestClient} client */ client => client.clock === clients[0].clock))
 }
 

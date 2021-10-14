@@ -57,6 +57,6 @@
     // "types": ["./src/utils/typedefs.js"]
     "allowSyntheticDefaultImports": true
   },
-  "include": ["./src/**/*.js", "./tests/**/*.js"],
+  "include": ["lib/**/*.js", "./tests/**/*.js", "./client/**/*.js", "./server/**/*.js", "./example/**/*.js"],
   "exclude": ["node_modules/**/*", "dist", "dist/**/*.js"]
 }

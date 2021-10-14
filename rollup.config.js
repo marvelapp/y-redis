@@ -1,7 +1,9 @@
 
+import resolve from '@rollup/plugin-node-resolve'
+
 const paths = path => {
-  if (/^lib0\//.test(path)) {
-    return `lib0/dist/${path.slice(5, -3)}.cjs`
+  if (/^y-redis$/.test(path)) {
+    return `./src/y-redis.js`
   }
   return path
 }
@@ -11,17 +13,18 @@ export default [{
   output: {
     file: './dist/test.cjs',
     format: 'cjs',
-    sourcemap: true,
-    paths
+    sourcemap: true
   },
   external: id => /^(lib0|yjs|ioredis)/.test(id)
 }, {
-  input: './src/y-redis.js',
+  input: './example/example.js',
   output: {
-    file: './dist/y-redis.cjs',
-    format: 'cjs',
+    file: './example/dist/example.js',
+    format: 'iife',
     sourcemap: true,
     paths
   },
-  external: id => /^(lib0|yjs|ioredis)/.test(id)
+  plugins: [
+    resolve({ mainFields: ['browser', 'main'] })
+  ]
 }]

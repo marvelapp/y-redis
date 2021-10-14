@@ -1,7 +1,7 @@
 
 import * as promise from 'lib0/promise'
 import * as t from 'lib0/testing'
-import { MemoryStorage } from '../src/y-redis.js'
+import { MemoryStorage } from '../lib/storage-memory.js'
 
 const storageSolutions = () => [{ name: 'memory', storage: new MemoryStorage() }]
 

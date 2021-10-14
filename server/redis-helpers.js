@@ -3,32 +3,9 @@ import Redis from 'ioredis' // eslint-disable-line no-unused-vars
 import * as map from 'lib0/map'
 import * as Y from 'yjs'
 import * as buffer from 'lib0/buffer'
-import { logger } from './helpers.js'
+import { logger, parseTimestamp, compareTimestamps } from '../lib/utils.js'
 
 export { Redis }
-
-/**
- * @param {string} time
- * @return {[number, number]}
- */
-export const parseTimestamp = time => {
-  const t = time.split('-').map(s => Number.parseInt(s))
-  if (t.length === 1) {
-    t.push(0)
-  }
-  return /** @type {any} */ (t)
-}
-
-/**
- * @param {string} time1
- * @param {string} time2
- * @return {boolean} True iff time1 >= time2
- */
-export const compareTimestamps = (time1, time2) => {
-  const t1 = parseTimestamp(time1)
-  const t2 = parseTimestamp(time2)
-  return t1[0] > t2[0] || (t1[0] === t2[0] && t1[1] >= t2[1])
-}
 
 /**
  * @param {Redis.Redis | Redis.Cluster} redis
@@ -131,6 +108,12 @@ export class Client {
   publishUpdate (collection, docid, update, clock) {
     logger(`collection: ${collection}, room: "${docid}". message: "${update}", confirmed clock: "${clock}"`)
   }
+  /**
+   * @param {string} collectionid
+   */
+  syncedCollection (collectionid) {
+    logger(`collection ${collectionid} synced`)
+  }
 }
 
 export class RedisConn {
@@ -166,15 +149,16 @@ export class RedisConn {
 
   /**
    * @param {Client} client
-   * @param {string} collectionId
+   * @param {string} collectionid
    * @param {string} startClock
    */
-  listen (client, collectionId, startClock) {
+  listen (client, collectionid, startClock) {
     const clients = new Map()
-    clients.set(collectionId, { clock: startClock, clients: new Set([client]) })
+    clients.set(collectionid, { clock: startClock, clients: new Set([client]) })
     // query initial state
     queryStreamUpdates(this.redisWrite, clients, false).then(() => {
-      const collection = map.setIfUndefined(this.addToCollections, collectionId, () => ({ clock: '0', clients: new Set() }))
+      client.syncedCollection(collectionid)
+      const collection = map.setIfUndefined(this.addToCollections, collectionid, () => ({ clock: '0', clients: new Set() }))
       collection.clients.add(client)
       if (this.collections.size === 0) {
         queryAllStreamsInterval(this)

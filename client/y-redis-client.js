@@ -1,15 +1,16 @@
 /* eslint-env browser */
 
 import { Observable } from 'lib0/observable'
-import * as protocol from './protocol.js'
+import * as protocol from '../lib/protocol.js'
 import * as Y from 'yjs'
 import * as math from 'lib0/math'
 import * as time from 'lib0/time'
 import * as map from 'lib0/map'
 import * as decoding from 'lib0/decoding'
 import * as encoding from 'lib0/encoding'
-import { MemoryStorage } from './storage-memory.js'
-import { AbstractClientStorage } from './storage.js' // eslint-disable-line
+import { MemoryStorage } from '../lib/storage-memory.js'
+import { logger } from '../lib/utils.js'
+import { AbstractClientStorage } from '../lib/storage.js' // eslint-disable-line
 import { promise } from 'lib0'
 
 const reconnectTimeoutBase = 1200
@@ -34,7 +35,6 @@ const setupWS = provider => {
 
     websocket.onmessage = event => {
       provider.wsLastMessageReceived = time.getUnixTime()
-      console.log('debugging client received message')
       protocol.clientReadMessage(decoding.createDecoder(new Uint8Array(event.data)), provider)
     }
     websocket.onclose = () => {
@@ -62,6 +62,7 @@ const setupWS = provider => {
       provider.emit('status', [{
         status: 'connected'
       }])
+      logger('Client connected to server')
       const encoder = encoding.createEncoder()
       protocol.clientRequestSubscriptions(encoder, provider.collections)
       websocket.send(encoding.toUint8Array(encoder))
@@ -146,7 +147,7 @@ export class RedisWebsocketProvider extends Observable {
     this._updateHandler = (update, origin, ydoc) => {
       if (origin !== this) {
         /**
-         * @param {{ ydocs: Map<string, any> }} collection
+         * @param {{ ydocs: Map<string, Y.Doc> }} collection
          * @param {string} collectionid
          */
         const checkPublishUpdate = ({ ydocs }, collectionid) => {
@@ -184,12 +185,14 @@ export class RedisWebsocketProvider extends Observable {
 
   /**
    * @param {string} collectionid
-   * @param {string} docid
    */
-  getDoc (collectionid, docid) {
-    const collection = this.collections.get(collectionid) || map.setIfUndefined(this.loadingCollections, collectionid, () => {
+  subscribeCollection (collectionid) {
+    this.collections.get(collectionid) || map.setIfUndefined(this.loadingCollections, collectionid, () => {
+      const ydocs = new Map()
+      const collection = { ydocs }
       this.storage.initializeCollection(collectionid).then(clock => {
-        this.collections.set(collectionid, { ydocs: collection.ydocs, clock })
+        logger('Initialized collection', { collectionid }, 'from storage')
+        this.collections.set(collectionid, { ydocs: ydocs, clock })
         this.loadingCollections.delete(collectionid)
         // now subscribe to updates on collection
         const encoder = encoding.createEncoder()
@@ -200,9 +203,18 @@ export class RedisWebsocketProvider extends Observable {
           this._send(encoding.toUint8Array(encoder))
         }
       })
-      return { ydocs: new Map() }
+      return collection
     })
-    return map.setIfUndefined(collection.ydocs, docid, () => {
+  }
+
+  /**
+   * @param {string} collectionid
+   * @param {string} docid
+   */
+  getDoc (collectionid, docid) {
+    this.subscribeCollection(collectionid) // sets the collection on either this.collections or this.loadingCollections
+    const ydocs = /** @type { { ydocs: Map<string, Y.Doc> } } */ (this.collections.get(collectionid) || this.loadingCollections.get(collectionid)).ydocs
+    return map.setIfUndefined(ydocs, docid, () => {
       const ydoc = new Y.Doc({ guid: docid })
       const docUpdates = this.storage.getDocument(collectionid, docid, '0')
       const pendingUpdates = this.storage.getPendingDocumentUpdates(collectionid, docid)
