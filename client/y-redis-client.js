@@ -11,7 +11,8 @@ import * as encoding from 'lib0/encoding'
 import { MemoryStorage } from '../lib/storage-memory.js'
 import { logger } from '../lib/utils.js'
 import { AbstractClientStorage } from '../lib/storage.js' // eslint-disable-line
-import { promise } from 'lib0'
+import * as promise from 'lib0/promise'
+import * as random from 'lib0/random'
 
 const reconnectTimeoutBase = 1200
 const maxReconnectTimeout = 2500
@@ -90,6 +91,7 @@ export class RedisWebsocketProvider extends Observable {
    */
   constructor (url, { WebSocketPolyfill = WebSocket, storage = new MemoryStorage() } = {}) {
     super()
+    this.clientID = random.uint32()
     this.url = url
     this.storage = storage
     /**
@@ -216,6 +218,7 @@ export class RedisWebsocketProvider extends Observable {
     const ydocs = /** @type { { ydocs: Map<string, Y.Doc> } } */ (this.collections.get(collectionid) || this.loadingCollections.get(collectionid)).ydocs
     return map.setIfUndefined(ydocs, docid, () => {
       const ydoc = new Y.Doc({ guid: docid })
+      ydoc.clientID = this.clientID
       const docUpdates = this.storage.getDocument(collectionid, docid, '0')
       const pendingUpdates = this.storage.getPendingDocumentUpdates(collectionid, docid)
       promise.all(/** @type {any} */ ([docUpdates, pendingUpdates])).then(([dupdates, pupdates]) => {
