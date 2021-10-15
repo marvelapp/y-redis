@@ -19,7 +19,10 @@
     "test": "LOG=y-redis node ./tests/index.js",
     "debug": "LOG=y-redis node --unhandled-rejections=strict --inspect-brk ./tests/index.js",
     "lint": "standard && tsc",
-    "preversion": "npm run lint && npm test && npm run dist"
+    "preversion": "npm run lint && npm test && npm run dist",
+    "example": "npm run dist && concurrently 'rollup -wc' 'serve'",
+    "server": "node server/websocket-server.js",
+    "server:debug": "node --inspect-brk server/websocket-server.js"
   },
   "files": [
     "dist/*",
@@ -52,6 +55,8 @@
     "@rollup/plugin-node-resolve": "^13.0.5",
     "@types/ioredis": "^4.27.7",
     "@types/ws": "^7.4.7",
+    "concurrently": "^6.3.0",
+    "serve": "^12.0.1",
     "standard": "^10.0.3",
     "typescript": "^3.9.10",
     "yjs": "^13.5.14"

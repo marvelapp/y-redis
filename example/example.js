@@ -6,6 +6,9 @@ localStorage.setItem('log', 'true')
 
 const provider = new RedisWebsocketProvider('ws://localhost:4321')
 provider.subscribeCollection('test')
+provider.on('synced', /** @param {Array<string>} collections */ collections => {
+  console.log('Synced the following collections: ', collections)
+})
 
 // @ts-ignore
 window.provider = provider

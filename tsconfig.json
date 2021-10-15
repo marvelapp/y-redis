@@ -58,5 +58,5 @@
     "allowSyntheticDefaultImports": true
   },
   "include": ["lib/**/*.js", "./tests/**/*.js", "./client/**/*.js", "./server/**/*.js", "./example/**/*.js"],
-  "exclude": ["node_modules/**/*", "dist", "dist/**/*.js"]
+  "exclude": ["node_modules/**/*", "dist", "dist/**/*.js", "example/dist/**/*.js"]
 }
