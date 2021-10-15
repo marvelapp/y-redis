@@ -16,8 +16,6 @@ import * as random from 'lib0/random'
 
 const reconnectTimeoutBase = 1200
 const maxReconnectTimeout = 2500
-// @todo - this should depend on awareness.outdatedTime
-const messageReconnectTimeout = 30000
 
 /**
  * @param {RedisWebsocketProvider} provider
@@ -165,12 +163,11 @@ export class RedisWebsocketProvider extends Observable {
       }
     }
     this._checkInterval = /** @type {any} */ (setInterval(() => {
-      if (this.wsconnected && messageReconnectTimeout < time.getUnixTime() - this.wsLastMessageReceived) {
-        // no message received in a long time - not even your own awareness
-        // updates (which are updated every 15 seconds)
+      if (this.wsconnected && protocol.PING_INTERVAL * 2 < time.getUnixTime() - this.wsLastMessageReceived) {
+        // no message received in a long time
         /** @type {WebSocket} */ (this.ws).close()
       }
-    }, messageReconnectTimeout / 10))
+    }, protocol.PING_INTERVAL))
     this.connect()
   }
 

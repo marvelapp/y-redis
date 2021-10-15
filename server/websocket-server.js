@@ -20,6 +20,7 @@ export class ClientConn {
      * @type {Set<string>} Subscription ids
      */
     this.subs = new Set()
+    this.isAlive = true
   }
 
   /**
@@ -66,6 +67,10 @@ export class ClientConn {
       redisConn.unlisten(this, collectionid)
     })
     this.subs.clear()
+    if (!this.ws.CLOSED) {
+      this.ws.terminate()
+    }
+    clients.delete(this)
   }
 }
 
@@ -81,6 +86,15 @@ const wss = new WebSocketServer({
  * @type {Set<ClientConn>}
  */
 const clients = new Set()
+
+const pingHandler = () => {
+  clients.forEach(client => {
+    if (!client.isAlive) { client.destroy() }
+    client.isAlive = false
+    client._send(protocol.encodePingMessage())
+  })
+}
+setInterval(pingHandler, protocol.PING_INTERVAL)
 
 wss.on('connection', ws => {
   ws.binaryType = 'arraybuffer'
