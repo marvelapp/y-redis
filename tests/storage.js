@@ -14,11 +14,17 @@ export const testStoringUpdates = async tc => {
       // starting tests for a specific storage solution:
 
       await t.groupAsync('storing updates', async () => {
+        const clock = await storage.getClock(tc.testName + '#')
+        t.assert(clock === '0')
         await storage.storeUpdate(tc.testName, 'testdoc', new Uint8Array([1]), '3')
         await storage.storeUpdate(tc.testName, 'testdoc', new Uint8Array([2]), '4')
         const updates = await storage.getDocument(tc.testName, 'testdoc', '0')
+        const endClock = await storage.getClock(tc.testName)
         t.assert(updates.updates.length === 2)
         t.assert(updates.endClock === '4')
+        t.assert(endClock === '4')
+        const collections = await storage.getCollections()
+        t.compare(collections, [{ collectionid: tc.testName, clock: '4' }])
       })
 
       await t.groupAsync('merging stored updates', async () => {
