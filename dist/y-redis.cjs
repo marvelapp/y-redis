@@ -2,44 +2,17 @@
 
 Object.defineProperty(exports, '__esModule', { value: true });
 
+function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
+
 var Y = require('yjs');
 var mutex = require('lib0/mutex');
 var observable = require('lib0/observable');
 var promise = require('lib0/promise');
 var error = require('lib0/error');
 var logging = require('lib0/logging');
-var Redis = require('ioredis');
+var Redis = _interopDefault(require('ioredis'));
 
-function _interopDefaultLegacy (e) { return e && typeof e === 'object' && 'default' in e ? e : { 'default': e }; }
-
-function _interopNamespace(e) {
-  if (e && e.__esModule) return e;
-  var n = Object.create(null);
-  if (e) {
-    Object.keys(e).forEach(function (k) {
-      if (k !== 'default') {
-        var d = Object.getOwnPropertyDescriptor(e, k);
-        Object.defineProperty(n, k, d.get ? d : {
-          enumerable: true,
-          get: function () {
-            return e[k];
-          }
-        });
-      }
-    });
-  }
-  n['default'] = e;
-  return Object.freeze(n);
-}
-
-var Y__namespace = /*#__PURE__*/_interopNamespace(Y);
-var mutex__namespace = /*#__PURE__*/_interopNamespace(mutex);
-var promise__namespace = /*#__PURE__*/_interopNamespace(promise);
-var error__namespace = /*#__PURE__*/_interopNamespace(error);
-var logging__namespace = /*#__PURE__*/_interopNamespace(logging);
-var Redis__default = /*#__PURE__*/_interopDefaultLegacy(Redis);
-
-const logger = logging__namespace.createModuleLogger('y-redis');
+const logger = logging.createModuleLogger('y-redis');
 
 /**
  * Handles persistence of a sinle doc.
@@ -54,7 +27,7 @@ class PersistenceDoc {
     this.rp = rp;
     this.name = name;
     this.doc = doc;
-    this.mux = mutex__namespace.createMutex();
+    this.mux = mutex.createMutex();
     /**
      * Next expected index / len of the list of updates
      * @type {number}
@@ -80,7 +53,7 @@ class PersistenceDoc {
       });
     };
     if (doc.store.clients.size > 0) {
-      this.updateHandler(Y__namespace.encodeStateAsUpdate(doc));
+      this.updateHandler(Y.encodeStateAsUpdateV2(doc));
     }
     doc.on('update', this.updateHandler);
     this.synced = rp.sub.subscribe(name).then(() => this.getUpdates());
@@ -103,11 +76,11 @@ class PersistenceDoc {
   getUpdates () {
     const startClock = this._clock;
     return this.rp.redis.lrangeBuffer(this.name + ':updates', startClock, -1).then(/** @type {function(Array<Buffer>)} */ updates => {
-      logger('Fetched ', logging__namespace.BOLD, logging__namespace.PURPLE, (updates.length).toString().padEnd(2), logging__namespace.UNBOLD, logging__namespace.UNCOLOR, ' updates');
+      logger('Fetched ', logging.BOLD, logging.PURPLE, (updates.length).toString().padEnd(2), logging.UNBOLD, logging.UNCOLOR, ' updates');
       this.mux(() => {
         this.doc.transact(() => {
-          const mergedUpdates = Y__namespace.mergeUpdates(updates);
-          Y__namespace.applyUpdate(this.doc, mergedUpdates);
+          const mergedUpdates = Y.mergeUpdatesV2(updates);
+          Y.applyUpdateV2(this.doc, mergedUpdates);
           const nextClock = startClock + updates.length;
           if (this._clock < nextClock) {
             this._clock = nextClock;
@@ -139,8 +112,8 @@ class PersistenceDoc {
  * @return {Redis.Redis | Redis.Cluster}
  */
 const createRedisInstance = (redisOpts, redisClusterOpts) => redisClusterOpts
-  ? new Redis__default['default'].Cluster(redisClusterOpts)
-  : (redisOpts ? new Redis__default['default'](redisOpts) : new Redis__default['default']());
+  ? new Redis.Cluster(redisClusterOpts)
+  : (redisOpts ? new Redis(redisOpts) : new Redis());
 
 /**
  * @extends Observable<string>
@@ -187,7 +160,7 @@ class RedisPersistence extends observable.Observable {
    */
   bindState (name, ydoc) {
     if (this.docs.has(name)) {
-      throw error__namespace.create(`"${name}" is already bound to this RedisPersistence instance`)
+      throw error.create(`"${name}" is already bound to this RedisPersistence instance`)
     }
     const pd = new PersistenceDoc(this, name, ydoc);
     this.docs.set(name, pd);
@@ -197,7 +170,7 @@ class RedisPersistence extends observable.Observable {
   destroy () {
     const docs = this.docs;
     this.docs = new Map();
-    return promise__namespace.all(Array.from(docs.values()).map(doc => doc.destroy())).then(() => {
+    return promise.all(Array.from(docs.values()).map(doc => doc.destroy())).then(() => {
       this.redis.quit();
       this.sub.quit();
       // @ts-ignore
@@ -236,7 +209,7 @@ class RedisPersistence extends observable.Observable {
    * @return {Promise<any>}
    */
   clearAllDocuments () {
-    return promise__namespace.all(Array.from(this.docs.keys()).map(name => this.redis.del(name + ':updates'))).then(() => {
+    return promise.all(Array.from(this.docs.keys()).map(name => this.redis.del(name + ':updates'))).then(() => {
       this.destroy();
     })
   }
