@@ -47,7 +47,7 @@ export class PersistenceDoc {
       })
     }
     if (doc.store.clients.size > 0) {
-      this.updateHandler(Y.encodeStateAsUpdate(doc))
+      this.updateHandler(Y.encodeStateAsUpdateV2(doc))
     }
     doc.on('update', this.updateHandler)
     this.synced = rp.sub.subscribe(name).then(() => this.getUpdates())
@@ -73,8 +73,8 @@ export class PersistenceDoc {
       logger('Fetched ', logging.BOLD, logging.PURPLE, (updates.length).toString().padEnd(2), logging.UNBOLD, logging.UNCOLOR, ' updates')
       this.mux(() => {
         this.doc.transact(() => {
-          const mergedUpdates = Y.mergeUpdates(updates);
-          Y.applyUpdate(this.doc, mergedUpdates);
+          const mergedUpdates = Y.mergeUpdatesV2(updates);
+          Y.applyUpdateV2(this.doc, mergedUpdates);
           const nextClock = startClock + updates.length
           if (this._clock < nextClock) {
             this._clock = nextClock
